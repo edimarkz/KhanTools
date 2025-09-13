@@ -1,2 +1,2 @@
-# KhanTools
-Khan Tools — Script para o Khan Academy! ⚡🧙‍♂️
+# ⚡ KhanTools
+### Rápido, Veloz e Poderoso script para Khan Academy!

@@ -1,2 +1,2 @@
-## Khan Tools .
+## Khan Tools 
 ### Script para o Khan Academy! ⚡🧙‍♂️

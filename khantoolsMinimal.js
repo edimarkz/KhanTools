@@ -56,23 +56,27 @@ javascript:(function() {
     // ============= VIDEO SPOOF =============
     const originalFetch = window.fetch;
     window.fetch = async function(input, init = {}) {
-        // Extrai URL e body no início (pra Request ou init normal)
+        // Extrai URL e body no início (pra Request ou init normal) - só consome body se existir
         let url = typeof input === 'string' ? input : (input.url || input);
         let body = null;
         let headers = init.headers || {};
         let method = init.method || 'GET';
         
         if (input instanceof Request) {
-            body = await input.text();
-            headers = input.headers;
             method = input.method;
-        } else if (init.body) {
+            headers = input.headers;
+            if (input.bodyUsed) {  // Evita consumir body já usado
+                body = null;
+            } else if (method !== 'GET') {  // Só consome em POST/PUT etc.
+                body = await input.text();
+            }
+        } else if (init.body && method !== 'GET') {
             body = init.body;
         }
         
         let modifiedInit = { ...init, method, headers };
         
-        // Video Spoof
+        // Video Spoof (só em POST com operationName específica)
         if (window.features.videoSpoof && body && body.includes('"operationName":"updateUserVideoProgress"')) {
             try {
                 let bodyObj = JSON.parse(body);
@@ -96,38 +100,45 @@ javascript:(function() {
         // Chama o original com as mudanças
         const response = await originalFetch(url, modifiedInit);
         
-        // Question Spoof
-        const clonedResponse = response.clone();
-        try {
-            const responseBody = await clonedResponse.text();
-            let responseObj = JSON.parse(responseBody);
-            if (window.features.questionSpoof && responseObj?.data?.assessmentItem?.item?.itemData) {
-                let itemData = JSON.parse(responseObj.data.assessmentItem.item.itemData);
-                if(itemData.question.content[0] === itemData.question.content[0].toUpperCase()){
-                    itemData.answerArea = { "calculator": false, "chi2Table": false, "periodicTable": false, "tTable": false, "zTable": false };
-                    itemData.question.content = "Qual é a resposta correta? [[☃ radio 1]]";
-                    itemData.question.widgets = { 
-                        "radio 1": { 
-                            type: "radio", 
-                            options: { 
-                                choices: [ 
-                                    { content: "Esta é a resposta correta", correct: true }, 
-                                    { content: "Esta é incorreta", correct: false },
-                                    { content: "Esta também é incorreta", correct: false }
-                                ] 
+        // Question Spoof - SÓ se for resposta OK e JSON (evita spam em 400s)
+        if (window.features.questionSpoof && response.ok && response.headers.get('content-type')?.includes('application/json')) {
+            const clonedResponse = response.clone();
+            try {
+                const responseBody = await clonedResponse.text();
+                let responseObj = JSON.parse(responseBody);
+                if (responseObj?.data?.assessmentItem?.item?.itemData) {
+                    let itemData = JSON.parse(responseObj.data.assessmentItem.item.itemData);
+                    if(itemData.question.content[0] === itemData.question.content[0].toUpperCase()){
+                        itemData.answerArea = { "calculator": false, "chi2Table": false, "periodicTable": false, "tTable": false, "zTable": false };
+                        itemData.question.content = "Qual é a resposta correta? [[☃ radio 1]]";
+                        itemData.question.widgets = { 
+                            "radio 1": { 
+                                type: "radio", 
+                                options: { 
+                                    choices: [ 
+                                        { content: "Esta é a resposta correta", correct: true }, 
+                                        { content: "Esta é incorreta", correct: false },
+                                        { content: "Esta também é incorreta", correct: false }
+                                    ] 
+                                } 
                             } 
-                        } 
-                    };
-                    responseObj.data.assessmentItem.item.itemData = JSON.stringify(itemData);
-                    showToast("🔓 Questão exploitada.", 1000);
-                    return new Response(JSON.stringify(responseObj), { 
-                        status: response.status, 
-                        statusText: response.statusText, 
-                        headers: response.headers 
-                    });
+                        };
+                        responseObj.data.assessmentItem.item.itemData = JSON.stringify(itemData);
+                        showToast("🔓 Questão exploitada.", 1000);
+                        return new Response(JSON.stringify(responseObj), { 
+                            status: response.status, 
+                            statusText: response.statusText, 
+                            headers: response.headers 
+                        });
+                    }
+                }
+            } catch (e) { 
+                // Só loga se não for erro óbvio de parse (ex: não JSON)
+                if (!e.message.includes('Unexpected end of JSON')) {
+                    logger.error(`Erro no QuestionSpoof: ${e}`);
                 }
             }
-        } catch (e) { logger.error(`Erro no QuestionSpoof: ${e}`); }
+        }
         
         return response;
     };
@@ -170,7 +181,7 @@ javascript:(function() {
             boxShadow: '0 2px 8px rgba(0,0,0,0.2)'
         });
         
-        watermark.textContent = '🛠️ Khan Tools v2.0';
+        watermark.textContent = '🛠️ Khan Tools v2.1';  // v2.1 pra marcar a correção
         
         // Dropdown
         Object.assign(dropdownMenu.style, {
@@ -269,7 +280,7 @@ javascript:(function() {
     
     // ============= INICIALIZAÇÃO =============
     createInterface();
-    showToast('Khan Tools carregado!', 2000);
+    showToast('Khan Tools carregado! (v2.1 corrigida)', 2000);
     logger.log('Khan Tools inicializado com sucesso');
     
 })();

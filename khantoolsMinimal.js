@@ -112,30 +112,58 @@
         }
     }
     
-    // ============= FETCH INTERCEPT (BASEADO NO KHANWAREMINIMAL) =============
+    // ============= FETCH INTERCEPT =============
     const originalFetch = window.fetch;
     
     window.fetch = async function(input, init = {}) {
-        let body;
+        // Determina URL, method, headers
+        let url, method, headers;
+        if (typeof input === 'string') {
+            url = input;
+            method = init.method || 'GET';
+            headers = init.headers || {};
+        } else if (input instanceof Request) {
+            url = input.url;
+            method = input.method;
+            headers = input.headers;
+        } else {
+            url = input.url || input;
+            method = init.method || 'GET';
+            headers = init.headers || {};
+        }
+        
+        // Obtém body sem consumir o original
+        let body = null;
         if (input instanceof Request) {
-            body = await input.text();
+            const clone = input.clone();
+            body = await clone.text();
         } else if (init && init.body) {
             body = init.body;
         }
         
+        // Modificações de request
+        let requestToPass = input;
+        let initToPass = init;
+        let modifiedBody = body;
+        
         // ===== MINUTE FARM =====
-        if (window.features.minuteFarm && body && input.url.includes("mark_conversions")) {
+        if (window.features.minuteFarm && body && url.includes("mark_conversions")) {
             try {
                 if (body.includes("termination_event")) {
                     showToast("🚫 Limitador de tempo bloqueado.", 1000);
-                    return originalFetch.apply(this, arguments);
+                    // Retorna uma resposta dummy bem-sucedida para evitar erros no site
+                    return Promise.resolve(new Response(JSON.stringify({}), {
+                        status: 200,
+                        statusText: 'OK',
+                        headers: { 'Content-Type': 'application/json' }
+                    }));
                 }
             } catch (e) {
                 logger.error(`Erro no MinuteFarm: ${e}`);
             }
         }
         
-        // ===== VIDEO SPOOF (GRADUAL, SEM PAUSA) =====
+        // ===== VIDEO SPOOF =====
         if (window.features.videoSpoof && body && body.includes('"operationName":"updateUserVideoProgress"')) {
             try {
                 let bodyObj = JSON.parse(body);
@@ -143,20 +171,24 @@
                     const durationSeconds = bodyObj.variables.input.durationSeconds;
                     bodyObj.variables.input.secondsWatched = durationSeconds;
                     bodyObj.variables.input.lastSecondWatched = durationSeconds;
-                    const newBody = JSON.stringify(bodyObj);
-                    if (input instanceof Request) {
-                        input = new Request(input, { ...init, body: newBody });
-                    } else {
-                        init.body = newBody;
-                    }
+                    modifiedBody = JSON.stringify(bodyObj);
                     showToast("🔓 Vídeo exploitado.", 1000);
+                    
+                    // Cria novo Request com body modificado
+                    requestToPass = new Request(url, {
+                        method: method,
+                        headers: headers,
+                        body: modifiedBody
+                    });
+                    initToPass = {}; // Não usa init quando passando Request
                 }
             } catch (e) {
                 logger.error(`Erro no VideoSpoof: ${e}`);
             }
         }
         
-        const originalResponse = await originalFetch.apply(this, arguments);
+        // Chama fetch original com o request apropriado
+        const originalResponse = await originalFetch(requestToPass, initToPass);
         const clonedResponse = originalResponse.clone();
         
         // ===== QUESTION SPOOF =====
@@ -349,6 +381,23 @@
                     }[featureName] || featureName;
                     const status = value ? 'ativado' : 'desativado';
                     showToast(`${displayName} ${status}!`, 1500);
+                    
+                    // Para autoAnswer, reinicia o loop se ativado
+                    if (featureName === 'autoAnswer' && value) {
+                        khanToolsDominates = true;
+                        // Inicia o loop
+                        (async () => { 
+                            while (khanToolsDominates) {
+                                const selectorsToCheck = [...baseSelectors];
+                                for (const q of selectorsToCheck) {
+                                    findAndClickBySelector(q);
+                                }
+                                await delay(800);
+                            }
+                        })();
+                    } else if (featureName === 'autoAnswer' && !value) {
+                        khanToolsDominates = false;
+                    }
                 });
             });
         }

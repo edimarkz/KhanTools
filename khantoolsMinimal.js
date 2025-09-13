@@ -17,7 +17,9 @@
     window.features = {
         videoSpoof: true,
         questionSpoof: true,
-        darkMode: false
+        autoAnswer: true,
+        darkMode: true,
+        minuteFarm: true
     };
     
     window.featureConfigs = {};
@@ -29,17 +31,35 @@
     };
     
     function showToast(message, duration = 2000) {
-        const toast = document.createElement('div');
-        toast.style.cssText = `
-            position: fixed; bottom: 20px; right: 20px; background: #3f505b;
-            color: #faf9f5; padding: 12px 16px; border-radius: 8px; z-index: 10002;
-            font-family: 'Inter', 'Segoe UI', system-ui, sans-serif; font-size: 13px;
-            box-shadow: 0 4px 16px rgba(0,0,0,0.3); border: 1px solid #2a2f36;
-        `;
-        toast.textContent = message;
-        document.body.appendChild(toast);
-        setTimeout(() => toast.remove(), duration);
-        logger.log(message);
+        // Carrega Toastify se não estiver carregado
+        if (typeof Toastify === 'undefined') {
+            const link = document.createElement('link');
+            link.rel = 'stylesheet';
+            link.href = 'https://cdn.jsdelivr.net/npm/toastify-js/src/toastify.min.css';
+            document.head.appendChild(link);
+            const script = document.createElement('script');
+            script.src = 'https://cdn.jsdelivr.net/npm/toastify-js';
+            script.onload = () => {
+                Toastify({
+                    text: message,
+                    duration: duration,
+                    gravity: "bottom",
+                    position: "right",
+                    stopOnFocus: true,
+                    style: { background: "#000000" }
+                }).showToast();
+            };
+            document.head.appendChild(script);
+            return;
+        }
+        Toastify({
+            text: message,
+            duration: duration,
+            gravity: "bottom",
+            position: "right",
+            stopOnFocus: true,
+            style: { background: "#000000" }
+        }).showToast();
     }
     
     const setFeatureByPath = (path, value) => {
@@ -49,188 +69,162 @@
         obj[parts[0]] = value;
     };
     
-    // ============= FETCH INTERCEPT (CORRIGIDO) =============
+    // ============= SPLASH SCREEN =============
+    const splashScreen = document.createElement('div');
+    async function showSplashScreen() {
+        splashScreen.style.cssText = "position:fixed;top:0;left:0;width:100%;height:100%;background-color:#000;display:flex;align-items:center;justify-content:center;z-index:9999;opacity:0;transition:opacity 0.5s ease;user-select:none;color:white;font-family:Arial,sans-serif;font-size:30px;text-align:center;";
+        splashScreen.innerHTML = '<span style="color:white;">KHAN</span><span style="color:#72ff72;">TOOLS</span><br><small style="font-size:14px;opacity:0.7;">Versão 1.0 BETA</small>';
+        document.body.appendChild(splashScreen);
+        setTimeout(() => splashScreen.style.opacity = '1', 10);
+    }
+    async function hideSplashScreen() {
+        splashScreen.style.opacity = '0';
+        setTimeout(() => splashScreen.remove(), 500);
+    }
+    
+    const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
+    
+    // ============= DARK MODE COM DARKREADER =============
+    let darkReaderLoaded = false;
+    async function loadDarkReader() {
+        if (darkReaderLoaded) return;
+        try {
+            const script = await fetch('https://cdn.jsdelivr.net/npm/darkreader@4.9.92/darkreader.min.js').then(r => r.text());
+            eval(script);
+            DarkReader.setFetchMethod(window.fetch);
+            darkReaderLoaded = true;
+        } catch (e) {
+            logger.error(`Erro ao carregar DarkReader: ${e}`);
+        }
+    }
+    
+    function toggleDarkMode(enabled) {
+        if (!darkReaderLoaded) {
+            if (enabled) loadDarkReader().then(() => toggleDarkMode(true));
+            return;
+        }
+        if (enabled) {
+            DarkReader.enable();
+            showToast("🌙 Dark Mode ativado!", 1500);
+        } else {
+            DarkReader.disable();
+            showToast("☀️ Dark Mode desativado!", 1500);
+        }
+    }
+    
+    // ============= FETCH INTERCEPT (BASEADO NO KHANWAREMINIMAL) =============
     const originalFetch = window.fetch;
     
     window.fetch = async function(input, init = {}) {
-        // Extrai informações básicas sem consumir o body
-        let url, method, headers, body = null;
-        
-        if (typeof input === 'string') {
-            url = input;
-            method = init.method || 'GET';
-            headers = init.headers || {};
-            body = init.body;
-        } else if (input instanceof Request) {
-            url = input.url;
-            method = input.method;
-            headers = input.headers;
-            // NÃO consome o body aqui - isso é o que estava quebrando
-        } else {
-            url = input.url || input;
-            method = init.method || 'GET';
-            headers = init.headers || {};
+        let body;
+        if (input instanceof Request) {
+            body = await input.text();
+        } else if (init && init.body) {
             body = init.body;
         }
         
-        // ===== VIDEO SPOOF =====
-        if (window.features.videoSpoof && 
-            method === 'POST' && 
-            url.includes('/api/internal/graphql') &&
-            body && 
-            typeof body === 'string' &&
-            body.includes('"operationName":"updateUserVideoProgress"')) {
-            
+        // ===== MINUTE FARM =====
+        if (window.features.minuteFarm && body && input.url.includes("mark_conversions")) {
             try {
-                const bodyObj = JSON.parse(body);
-                if (bodyObj.variables?.input?.durationSeconds) {
-                    const duration = bodyObj.variables.input.durationSeconds;
-                    bodyObj.variables.input.secondsWatched = duration;
-                    bodyObj.variables.input.lastSecondWatched = duration;
-                    
-                    // Cria nova requisição com body modificado
-                    const modifiedInit = {
-                        ...init,
-                        method: 'POST',
-                        body: JSON.stringify(bodyObj),
-                        headers: {
-                            ...headers,
-                            'Content-Type': 'application/json'
-                        }
-                    };
-                    
-                    // Pausa o vídeo
-                    const videoElem = document.querySelector('video');
-                    if (videoElem) videoElem.pause();
-                    
-                    showToast("🎥 Vídeo completado automaticamente!", 1500);
-                    
-                    // Chama fetch original com dados modificados
-                    return originalFetch.call(this, url, modifiedInit);
+                if (body.includes("termination_event")) {
+                    showToast("🚫 Limitador de tempo bloqueado.", 1000);
+                    return originalFetch.apply(this, arguments);
+                }
+            } catch (e) {
+                logger.error(`Erro no MinuteFarm: ${e}`);
+            }
+        }
+        
+        // ===== VIDEO SPOOF (GRADUAL, SEM PAUSA) =====
+        if (window.features.videoSpoof && body && body.includes('"operationName":"updateUserVideoProgress"')) {
+            try {
+                let bodyObj = JSON.parse(body);
+                if (bodyObj.variables && bodyObj.variables.input) {
+                    const durationSeconds = bodyObj.variables.input.durationSeconds;
+                    bodyObj.variables.input.secondsWatched = durationSeconds;
+                    bodyObj.variables.input.lastSecondWatched = durationSeconds;
+                    const newBody = JSON.stringify(bodyObj);
+                    if (input instanceof Request) {
+                        input = new Request(input, { ...init, body: newBody });
+                    } else {
+                        init.body = newBody;
+                    }
+                    showToast("🔓 Vídeo exploitado.", 1000);
                 }
             } catch (e) {
                 logger.error(`Erro no VideoSpoof: ${e}`);
             }
         }
         
-        // Para requisições normais, chama o original sem modificações
-        const response = await originalFetch.call(this, input, init);
+        const originalResponse = await originalFetch.apply(this, arguments);
+        const clonedResponse = originalResponse.clone();
         
         // ===== QUESTION SPOOF =====
-        if (window.features.questionSpoof && 
-            response.ok && 
-            method === 'POST' &&
-            response.headers.get('content-type')?.includes('application/json') &&
-            url.includes('/api/internal/graphql')) {
-            
+        if (window.features.questionSpoof) {
             try {
-                const clonedResponse = response.clone();
-                const responseText = await clonedResponse.text();
-                
-                // Verifica se contém dados de questão
-                if (responseText.includes('"assessmentItem"') && 
-                    responseText.includes('"itemData"')) {
-                    
-                    const responseObj = JSON.parse(responseText);
-                    const assessmentItem = responseObj?.data?.assessmentItem?.item;
-                    
-                    if (assessmentItem?.itemData) {
-                        const itemData = JSON.parse(assessmentItem.itemData);
-                        
-                        // Verifica se é uma questão válida
-                        if (itemData.question?.content && 
-                            Array.isArray(itemData.question.content) &&
-                            itemData.question.content.length > 0 &&
-                            typeof itemData.question.content[0] === 'string' &&
-                            itemData.question.content[0].trim().length > 0) {
-                            
-                            // Substitui a questão por uma simples
-                            itemData.answerArea = { 
-                                "calculator": false, "chi2Table": false, 
-                                "periodicTable": false, "tTable": false, "zTable": false 
-                            };
-                            
-                            itemData.question.content = ["Qual é a resposta correta? [[☃ radio 1]]"];
-                            itemData.question.widgets = { 
-                                "radio 1": { 
-                                    type: "radio", 
-                                    options: { 
-                                        choices: [ 
-                                            { content: "Esta é a resposta correta ✓", correct: true }, 
-                                            { content: "Opção incorreta A", correct: false },
-                                            { content: "Opção incorreta B", correct: false }
-                                        ] 
-                                    } 
-                                } 
-                            };
-                            
-                            responseObj.data.assessmentItem.item.itemData = JSON.stringify(itemData);
-                            showToast("❓ Questão simplificada!", 1500);
-                            
-                            return new Response(JSON.stringify(responseObj), {
-                                status: response.status,
-                                statusText: response.statusText,
-                                headers: response.headers
-                            });
-                        }
+                const responseBody = await clonedResponse.text();
+                let responseObj = JSON.parse(responseBody);
+                if (responseObj?.data?.assessmentItem?.item?.itemData) {
+                    let itemData = JSON.parse(responseObj.data.assessmentItem.item.itemData);
+                    if (itemData.question?.content && Array.isArray(itemData.question.content) && itemData.question.content[0] === itemData.question.content[0].toUpperCase()) {
+                        itemData.answerArea = { "calculator": false, "chi2Table": false, "periodicTable": false, "tTable": false, "zTable": false };
+                        const phrases = [
+                            "🔥 Get good, get KhanTools!",
+                            "🤍 Made by User.",
+                            "☄️ By KhanTools.",
+                            "🌟 Star the project!",
+                            "🪶 Lite mode @ KhanToolsMinimal.js",
+                        ];
+                        itemData.question.content = [phrases[Math.floor(Math.random() * phrases.length)] + ` [[☃ radio 1]]`];
+                        itemData.question.widgets = { "radio 1": { type: "radio", options: { choices: [ { content: "Resposta correta.", correct: true }, { content: "Resposta incorreta.", correct: false } ] } } };
+                        responseObj.data.assessmentItem.item.itemData = JSON.stringify(itemData);
+                        showToast("🔓 Questão exploitada.", 1000);
+                        return new Response(JSON.stringify(responseObj), { 
+                            status: originalResponse.status, 
+                            statusText: originalResponse.statusText, 
+                            headers: originalResponse.headers 
+                        });
                     }
                 }
             } catch (e) {
-                // Silencioso para evitar spam - só loga erros importantes
-                if (!e.message.includes('JSON') && !e.message.includes('parse')) {
-                    logger.error(`Erro no QuestionSpoof: ${e}`);
-                }
+                // Silencioso
             }
         }
         
-        return response;
+        return originalResponse;
     };
     
-    // ============= DARK MODE =============
-    function toggleDarkMode(enabled) {
-        if (enabled) {
-            if (!document.getElementById('khan-tools-dark-mode')) {
-                const darkStyle = document.createElement('style');
-                darkStyle.id = 'khan-tools-dark-mode';
-                darkStyle.textContent = `
-                    html, body, [data-test-id="page-content-wrapper"] {
-                        background-color: #1a1a1a !important;
-                        color: #e0e0e0 !important;
-                    }
-                    .header, .nav-bar, [data-test-id="header"] {
-                        background-color: #2d2d2d !important;
-                        border-color: #404040 !important;
-                    }
-                    .card, .exercise-card, .video-card, [data-test-id="card"] {
-                        background-color: #2d2d2d !important;
-                        border-color: #404040 !important;
-                        color: #e0e0e0 !important;
-                    }
-                    input, textarea, select, [data-test-id="input"] {
-                        background-color: #404040 !important;
-                        border-color: #606060 !important;
-                        color: #e0e0e0 !important;
-                    }
-                    .perseus-widget-container, .perseus-renderer {
-                        background-color: #2d2d2d !important;
-                        color: #e0e0e0 !important;
-                    }
-                    button, a {
-                        color: #00d4aa !important;
-                    }
-                    .sidebar, .nav-sidebar {
-                        background-color: #2d2d2d !important;
-                    }
-                    .exercise-content-wrapper {
-                        background-color: #1a1a1a !important;
-                    }
-                `;
-                document.head.appendChild(darkStyle);
+    // ============= AUTO ANSWER =============
+    let khanToolsDominates = true;
+    const baseSelectors = [
+        `[data-testid="choice-icon__library-choice-icon"]`,
+        `[data-testid="exercise-check-answer"]`, 
+        `[data-testid="exercise-next-question"]`, 
+        `._1udzurba`,
+        `._awve9b`
+    ];
+    
+    function findAndClickBySelector(selector) {
+        const element = document.querySelector(selector);
+        if (element) {
+            element.click();
+            if (document.querySelector(selector + "> div") && document.querySelector(selector + "> div").innerText === "Mostrar resumo") {
+                showToast("🎉 Exercício concluído!", 3000);
+                // Play audio if desired, but omitted for simplicity
             }
-        } else {
-            const darkStyle = document.getElementById('khan-tools-dark-mode');
-            if (darkStyle) darkStyle.remove();
         }
+    }
+    
+    if (window.features.autoAnswer) {
+        (async () => { 
+            while (khanToolsDominates) {
+                const selectorsToCheck = [...baseSelectors];
+                for (const q of selectorsToCheck) {
+                    findAndClickBySelector(q);
+                }
+                await delay(800);
+            }
+        })();
     }
     
     // ============= INTERFACE =============
@@ -249,7 +243,7 @@
             boxShadow: '0 2px 8px rgba(0,0,0,0.2)'
         });
         
-        watermark.textContent = '🛠️ Khan Tools v2.2';
+        watermark.textContent = '🛠️ Khan Tools v1.0 BETA';
         
         // Dropdown
         Object.assign(dropdownMenu.style, {
@@ -299,12 +293,22 @@
             </label>
             
             <label>
+                <input type="checkbox" id="autoAnswer" setting-data="features.autoAnswer" ${window.features.autoAnswer ? 'checked' : ''}>
+                ⚡ Auto Answer
+            </label>
+            
+            <label>
+                <input type="checkbox" id="minuteFarm" setting-data="features.minuteFarm" ${window.features.minuteFarm ? 'checked' : ''}>
+                ⏱️ Minute Farm
+            </label>
+            
+            <label>
                 <input type="checkbox" id="darkMode" setting-data="features.darkMode" ${window.features.darkMode ? 'checked' : ''}>
                 🌙 Dark Mode
             </label>
             
             <div style="margin-top: 10px; padding-top: 8px; border-top: 1px solid #2a2f36; font-size: 10px; color: #999;">
-                v2.2 - Bugs Corrigidos
+                Versão 1.0 BETA
             </div>
         `;
         
@@ -336,27 +340,45 @@
                     if (callback) callback(value, e);
                     
                     const featureName = setting.split('.')[1];
-                    const displayName = featureName === 'videoSpoof' ? 'Video Spoof' :
-                                      featureName === 'questionSpoof' ? 'Question Spoof' : 'Dark Mode';
+                    const displayName = {
+                        videoSpoof: 'Video Spoof',
+                        questionSpoof: 'Question Spoof',
+                        autoAnswer: 'Auto Answer',
+                        minuteFarm: 'Minute Farm',
+                        darkMode: 'Dark Mode'
+                    }[featureName] || featureName;
                     const status = value ? 'ativado' : 'desativado';
-                    showToast(`${displayName} ${status}!`);
+                    showToast(`${displayName} ${status}!`, 1500);
                 });
             });
         }
         
-        handleInput(['videoSpoof', 'questionSpoof']);
+        handleInput(['videoSpoof', 'questionSpoof', 'autoAnswer', 'minuteFarm']);
         handleInput('darkMode', (checked) => toggleDarkMode(checked));
     }
     
     // ============= INICIALIZAÇÃO =============
+    showSplashScreen();
+    
     // Aguarda um pouco para garantir que a página esteja carregada
     if (document.readyState === 'loading') {
-        document.addEventListener('DOMContentLoaded', createInterface);
+        document.addEventListener('DOMContentLoaded', () => {
+            setTimeout(() => {
+                createInterface();
+                if (window.features.darkMode) toggleDarkMode(true);
+                hideSplashScreen();
+                showToast('✅ Khan Tools carregado! (Versão 1.0 BETA)', 3000);
+                logger.log('Khan Tools inicializado com sucesso - Versão 1.0 BETA');
+            }, 500);
+        });
     } else {
-        setTimeout(createInterface, 100);
+        setTimeout(() => {
+            createInterface();
+            if (window.features.darkMode) toggleDarkMode(true);
+            hideSplashScreen();
+            showToast('✅ Khan Tools carregado! (Versão 1.0 BETA)', 3000);
+            logger.log('Khan Tools inicializado com sucesso - Versão 1.0 BETA');
+        }, 100);
     }
-    
-    showToast('✅ Khan Tools carregado! (v2.2 - Correções)', 3000);
-    logger.log('Khan Tools inicializado com sucesso - Versão corrigida');
     
 })();

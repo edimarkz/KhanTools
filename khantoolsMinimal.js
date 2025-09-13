@@ -1,4 +1,4 @@
-javascript:(function() {
+(function() {
     'use strict';
     
     if (window.KhanToolsLoaded) {
@@ -22,9 +22,6 @@ javascript:(function() {
     
     window.featureConfigs = {};
     
-    // Estado global
-    let processedVideos = new Set();
-    
     // ============= UTILITÁRIOS =============
     const logger = {
         log: (msg) => console.log(`[KhanTools] ${msg}`),
@@ -45,7 +42,6 @@ javascript:(function() {
         logger.log(message);
     }
     
-    // Função do KhanTools - Setar Features
     const setFeatureByPath = (path, value) => {
         let obj = window;
         const parts = path.split('.');
@@ -53,88 +49,135 @@ javascript:(function() {
         obj[parts[0]] = value;
     };
     
-    // ============= VIDEO SPOOF =============
+    // ============= FETCH INTERCEPT (CORRIGIDO) =============
     const originalFetch = window.fetch;
+    
     window.fetch = async function(input, init = {}) {
-        // Extrai URL e body no início (pra Request ou init normal) - só consome body se existir
-        let url = typeof input === 'string' ? input : (input.url || input);
-        let body = null;
-        let headers = init.headers || {};
-        let method = init.method || 'GET';
+        // Extrai informações básicas sem consumir o body
+        let url, method, headers, body = null;
         
-        if (input instanceof Request) {
+        if (typeof input === 'string') {
+            url = input;
+            method = init.method || 'GET';
+            headers = init.headers || {};
+            body = init.body;
+        } else if (input instanceof Request) {
+            url = input.url;
             method = input.method;
             headers = input.headers;
-            if (input.bodyUsed) {  // Evita consumir body já usado
-                body = null;
-            } else if (method !== 'GET') {  // Só consome em POST/PUT etc.
-                body = await input.text();
-            }
-        } else if (init.body && method !== 'GET') {
+            // NÃO consome o body aqui - isso é o que estava quebrando
+        } else {
+            url = input.url || input;
+            method = init.method || 'GET';
+            headers = init.headers || {};
             body = init.body;
         }
         
-        let modifiedInit = { ...init, method, headers };
-        
-        // Video Spoof (só em POST com operationName específica)
-        if (window.features.videoSpoof && body && body.includes('"operationName":"updateUserVideoProgress"')) {
+        // ===== VIDEO SPOOF =====
+        if (window.features.videoSpoof && 
+            method === 'POST' && 
+            url.includes('/api/internal/graphql') &&
+            body && 
+            typeof body === 'string' &&
+            body.includes('"operationName":"updateUserVideoProgress"')) {
+            
             try {
-                let bodyObj = JSON.parse(body);
-                if (bodyObj.variables && bodyObj.variables.input) {
-                    const durationSeconds = bodyObj.variables.input.durationSeconds;
-                    bodyObj.variables.input.secondsWatched = durationSeconds;
-                    bodyObj.variables.input.lastSecondWatched = durationSeconds;
-                    body = JSON.stringify(bodyObj);  // Body falso
-                    modifiedInit.body = body;  // Propaga pro init
-                    modifiedInit.headers = { ...modifiedInit.headers, 'Content-Type': 'application/json' };
+                const bodyObj = JSON.parse(body);
+                if (bodyObj.variables?.input?.durationSeconds) {
+                    const duration = bodyObj.variables.input.durationSeconds;
+                    bodyObj.variables.input.secondsWatched = duration;
+                    bodyObj.variables.input.lastSecondWatched = duration;
                     
-                    // Pausa o player rapidinho (opcional, como no UserScript)
+                    // Cria nova requisição com body modificado
+                    const modifiedInit = {
+                        ...init,
+                        method: 'POST',
+                        body: JSON.stringify(bodyObj),
+                        headers: {
+                            ...headers,
+                            'Content-Type': 'application/json'
+                        }
+                    };
+                    
+                    // Pausa o vídeo
                     const videoElem = document.querySelector('video');
                     if (videoElem) videoElem.pause();
                     
-                    showToast("🎥 Vídeo exploitado (agora de verdade!)", 1000);
+                    showToast("🎥 Vídeo completado automaticamente!", 1500);
+                    
+                    // Chama fetch original com dados modificados
+                    return originalFetch.call(this, url, modifiedInit);
                 }
-            } catch (e) { logger.error(`Erro no VideoSpoof: ${e}`); }
+            } catch (e) {
+                logger.error(`Erro no VideoSpoof: ${e}`);
+            }
         }
         
-        // Chama o original com as mudanças
-        const response = await originalFetch(url, modifiedInit);
+        // Para requisições normais, chama o original sem modificações
+        const response = await originalFetch.call(this, input, init);
         
-        // Question Spoof - SÓ se for resposta OK e JSON (evita spam em 400s)
-        if (window.features.questionSpoof && response.ok && response.headers.get('content-type')?.includes('application/json')) {
-            const clonedResponse = response.clone();
+        // ===== QUESTION SPOOF =====
+        if (window.features.questionSpoof && 
+            response.ok && 
+            method === 'POST' &&
+            response.headers.get('content-type')?.includes('application/json') &&
+            url.includes('/api/internal/graphql')) {
+            
             try {
-                const responseBody = await clonedResponse.text();
-                let responseObj = JSON.parse(responseBody);
-                if (responseObj?.data?.assessmentItem?.item?.itemData) {
-                    let itemData = JSON.parse(responseObj.data.assessmentItem.item.itemData);
-                    if(itemData.question.content[0] === itemData.question.content[0].toUpperCase()){
-                        itemData.answerArea = { "calculator": false, "chi2Table": false, "periodicTable": false, "tTable": false, "zTable": false };
-                        itemData.question.content = "Qual é a resposta correta? [[☃ radio 1]]";
-                        itemData.question.widgets = { 
-                            "radio 1": { 
-                                type: "radio", 
-                                options: { 
-                                    choices: [ 
-                                        { content: "Esta é a resposta correta", correct: true }, 
-                                        { content: "Esta é incorreta", correct: false },
-                                        { content: "Esta também é incorreta", correct: false }
-                                    ] 
+                const clonedResponse = response.clone();
+                const responseText = await clonedResponse.text();
+                
+                // Verifica se contém dados de questão
+                if (responseText.includes('"assessmentItem"') && 
+                    responseText.includes('"itemData"')) {
+                    
+                    const responseObj = JSON.parse(responseText);
+                    const assessmentItem = responseObj?.data?.assessmentItem?.item;
+                    
+                    if (assessmentItem?.itemData) {
+                        const itemData = JSON.parse(assessmentItem.itemData);
+                        
+                        // Verifica se é uma questão válida
+                        if (itemData.question?.content && 
+                            Array.isArray(itemData.question.content) &&
+                            itemData.question.content.length > 0 &&
+                            typeof itemData.question.content[0] === 'string' &&
+                            itemData.question.content[0].trim().length > 0) {
+                            
+                            // Substitui a questão por uma simples
+                            itemData.answerArea = { 
+                                "calculator": false, "chi2Table": false, 
+                                "periodicTable": false, "tTable": false, "zTable": false 
+                            };
+                            
+                            itemData.question.content = ["Qual é a resposta correta? [[☃ radio 1]]"];
+                            itemData.question.widgets = { 
+                                "radio 1": { 
+                                    type: "radio", 
+                                    options: { 
+                                        choices: [ 
+                                            { content: "Esta é a resposta correta ✓", correct: true }, 
+                                            { content: "Opção incorreta A", correct: false },
+                                            { content: "Opção incorreta B", correct: false }
+                                        ] 
+                                    } 
                                 } 
-                            } 
-                        };
-                        responseObj.data.assessmentItem.item.itemData = JSON.stringify(itemData);
-                        showToast("🔓 Questão exploitada.", 1000);
-                        return new Response(JSON.stringify(responseObj), { 
-                            status: response.status, 
-                            statusText: response.statusText, 
-                            headers: response.headers 
-                        });
+                            };
+                            
+                            responseObj.data.assessmentItem.item.itemData = JSON.stringify(itemData);
+                            showToast("❓ Questão simplificada!", 1500);
+                            
+                            return new Response(JSON.stringify(responseObj), {
+                                status: response.status,
+                                statusText: response.statusText,
+                                headers: response.headers
+                            });
+                        }
                     }
                 }
-            } catch (e) { 
-                // Só loga se não for erro óbvio de parse (ex: não JSON)
-                if (!e.message.includes('Unexpected end of JSON')) {
+            } catch (e) {
+                // Silencioso para evitar spam - só loga erros importantes
+                if (!e.message.includes('JSON') && !e.message.includes('parse')) {
                     logger.error(`Erro no QuestionSpoof: ${e}`);
                 }
             }
@@ -150,12 +193,37 @@ javascript:(function() {
                 const darkStyle = document.createElement('style');
                 darkStyle.id = 'khan-tools-dark-mode';
                 darkStyle.textContent = `
-                    html,body,[data-test-id="page-content-wrapper"]{background-color:#1a1a1a!important;color:#e0e0e0!important;}
-                    .header,.nav-bar,[data-test-id="header"]{background-color:#2d2d2d!important;border-color:#404040!important;}
-                    .card,.exercise-card,.video-card,[data-test-id="card"]{background-color:#2d2d2d!important;border-color:#404040!important;color:#e0e0e0!important;}
-                    input,textarea,select,[data-test-id="input"]{background-color:#404040!important;border-color:#606060!important;color:#e0e0e0!important;}
-                    .perseus-widget-container,.perseus-renderer{background-color:#2d2d2d!important;color:#e0e0e0!important;}
-                    button,a{color:#00d4aa!important;}
+                    html, body, [data-test-id="page-content-wrapper"] {
+                        background-color: #1a1a1a !important;
+                        color: #e0e0e0 !important;
+                    }
+                    .header, .nav-bar, [data-test-id="header"] {
+                        background-color: #2d2d2d !important;
+                        border-color: #404040 !important;
+                    }
+                    .card, .exercise-card, .video-card, [data-test-id="card"] {
+                        background-color: #2d2d2d !important;
+                        border-color: #404040 !important;
+                        color: #e0e0e0 !important;
+                    }
+                    input, textarea, select, [data-test-id="input"] {
+                        background-color: #404040 !important;
+                        border-color: #606060 !important;
+                        color: #e0e0e0 !important;
+                    }
+                    .perseus-widget-container, .perseus-renderer {
+                        background-color: #2d2d2d !important;
+                        color: #e0e0e0 !important;
+                    }
+                    button, a {
+                        color: #00d4aa !important;
+                    }
+                    .sidebar, .nav-sidebar {
+                        background-color: #2d2d2d !important;
+                    }
+                    .exercise-content-wrapper {
+                        background-color: #1a1a1a !important;
+                    }
                 `;
                 document.head.appendChild(darkStyle);
             }
@@ -176,12 +244,12 @@ javascript:(function() {
             backgroundColor: '#3f505b', color: '#faf9f5', fontSize: '15px',
             fontFamily: "'Inter', 'Segoe UI', system-ui, sans-serif",
             display: 'flex', justifyContent: 'center', alignItems: 'center',
-            cursor: 'default', userSelect: 'none', borderRadius: '0 0 10px 10px',
-            zIndex: '1001', transition: 'transform 0.3s ease',
+            cursor: 'pointer', userSelect: 'none', borderRadius: '0 0 10px 10px',
+            zIndex: '10001', transition: 'transform 0.3s ease',
             boxShadow: '0 2px 8px rgba(0,0,0,0.2)'
         });
         
-        watermark.textContent = '🛠️ Khan Tools v2.1';  // v2.1 pra marcar a correção
+        watermark.textContent = '🛠️ Khan Tools v2.2';
         
         // Dropdown
         Object.assign(dropdownMenu.style, {
@@ -189,13 +257,12 @@ javascript:(function() {
             backgroundColor: '#384147', borderRadius: '0 0 10px 10px',
             color: '#faf9f5', fontSize: '13px',
             fontFamily: "'Inter', 'Segoe UI', system-ui, sans-serif",
-            display: 'none', flexDirection: 'column', zIndex: '1000',
+            display: 'none', flexDirection: 'column', zIndex: '10000',
             padding: '10px', cursor: 'default', userSelect: 'none',
             boxShadow: '0 4px 16px rgba(0,0,0,0.3)',
             backdropFilter: 'blur(5px)'
         });
         
-        // CSS interno
         dropdownMenu.innerHTML = `
             <style>
                 input[type="checkbox"] {
@@ -222,19 +289,23 @@ javascript:(function() {
             </div>
             
             <label>
-                <input type="checkbox" id="videoSpoof" setting-data="features.videoSpoof" ${features.videoSpoof ? 'checked' : ''}>
+                <input type="checkbox" id="videoSpoof" setting-data="features.videoSpoof" ${window.features.videoSpoof ? 'checked' : ''}>
                 🎥 Video Spoof
             </label>
             
             <label>
-                <input type="checkbox" id="questionSpoof" setting-data="features.questionSpoof" ${features.questionSpoof ? 'checked' : ''}>
+                <input type="checkbox" id="questionSpoof" setting-data="features.questionSpoof" ${window.features.questionSpoof ? 'checked' : ''}>
                 ❓ Question Spoof  
             </label>
             
             <label>
-                <input type="checkbox" id="darkMode" setting-data="features.darkMode" ${features.darkMode ? 'checked' : ''}>
+                <input type="checkbox" id="darkMode" setting-data="features.darkMode" ${window.features.darkMode ? 'checked' : ''}>
                 🌙 Dark Mode
             </label>
+            
+            <div style="margin-top: 10px; padding-top: 8px; border-top: 1px solid #2a2f36; font-size: 10px; color: #999;">
+                v2.2 - Bugs Corrigidos
+            </div>
         `;
         
         watermark.appendChild(dropdownMenu);
@@ -264,7 +335,6 @@ javascript:(function() {
                     
                     if (callback) callback(value, e);
                     
-                    // Feedback visual
                     const featureName = setting.split('.')[1];
                     const displayName = featureName === 'videoSpoof' ? 'Video Spoof' :
                                       featureName === 'questionSpoof' ? 'Question Spoof' : 'Dark Mode';
@@ -279,8 +349,14 @@ javascript:(function() {
     }
     
     // ============= INICIALIZAÇÃO =============
-    createInterface();
-    showToast('Khan Tools carregado! (v2.1 corrigida)', 2000);
-    logger.log('Khan Tools inicializado com sucesso');
+    // Aguarda um pouco para garantir que a página esteja carregada
+    if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', createInterface);
+    } else {
+        setTimeout(createInterface, 100);
+    }
+    
+    showToast('✅ Khan Tools carregado! (v2.2 - Correções)', 3000);
+    logger.log('Khan Tools inicializado com sucesso - Versão corrigida');
     
 })();

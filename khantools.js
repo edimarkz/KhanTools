@@ -1,117 +1,47 @@
-javascript:(function(){
+(function(){
     'use strict';
     
-    // Verificar se já está rodando
-    if (window.KhanTools && window.KhanTools.state.initialized) {
-        window.KhanTools.showToast('Khan Tools já está ativo!');
+    console.log('🎯 Khan Tools - Teste iniciado');
+    
+    // Verificar se estamos na Khan Academy
+    if (!window.location.href.includes('khanacademy.org')) {
+        alert('Khan Tools funciona apenas na Khan Academy!');
         return;
     }
     
-    // URLs dos módulos no GitHub (substitua pelo seu repositório)
-    const GITHUB_BASE = 'https://raw.githubusercontent.com/SEU_USUARIO/KhanTools/main/';
+    // Criar interface simples de teste
+    const watermark = document.createElement('div');
+    watermark.style.cssText = `
+        position: fixed; top: 10px; right: 20px; 
+        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        color: white; padding: 10px 15px; border-radius: 8px;
+        font-family: Arial, sans-serif; font-size: 14px;
+        z-index: 10001; cursor: pointer;
+        box-shadow: 0 4px 16px rgba(102, 126, 234, 0.3);
+    `;
+    watermark.textContent = 'Khan Tools v2.0';
     
-    const modules = [
-        'functions/utils.js',
-        'functions/videoSpoof.js', 
-        'functions/questionSpoof.js',
-        'functions/darkMode.js',
-        'visuals/styles.js',
-        'visuals/interface.js'
-    ];
+    watermark.addEventListener('click', () => {
+        alert('Khan Tools funcionando! 🎉');
+    });
     
-    // Função para carregar um módulo
-    async function loadModule(url) {
-        try {
-            const response = await fetch(url);
-            if (!response.ok) throw new Error(`Erro ${response.status}: ${response.statusText}`);
-            const code = await response.text();
-            
-            // Executar o código do módulo
-            const script = document.createElement('script');
-            script.textContent = code;
-            document.head.appendChild(script);
-            script.remove();
-            
-            return true;
-        } catch (error) {
-            console.error(`[KhanTools] Erro ao carregar ${url}:`, error);
-            return false;
-        }
-    }
+    document.body.appendChild(watermark);
     
-    // Função principal de inicialização
-    async function initialize() {
-        try {
-            // Verificar se estamos na Khan Academy
-            if (!window.location.href.includes('khanacademy.org')) {
-                alert('Khan Tools funciona apenas na Khan Academy!');
-                return;
-            }
-            
-            console.log('[KhanTools] Iniciando carregamento dos módulos...');
-            
-            // Carregar todos os módulos
-            let loadedCount = 0;
-            for (const module of modules) {
-                const url = GITHUB_BASE + module;
-                const success = await loadModule(url);
-                if (success) {
-                    loadedCount++;
-                    console.log(`[KhanTools] ✓ ${module} carregado`);
-                } else {
-                    console.error(`[KhanTools] ✗ Falha ao carregar ${module}`);
-                }
-            }
-            
-            // Verificar se todos os módulos foram carregados
-            if (loadedCount !== modules.length) {
-                throw new Error(`Apenas ${loadedCount}/${modules.length} módulos foram carregados`);
-            }
-            
-            // Aguardar o KhanTools estar disponível
-            if (typeof window.KhanTools === 'undefined') {
-                throw new Error('KhanTools não foi inicializado corretamente');
-            }
-            
-            // Inicializar funcionalidades
-            console.log('[KhanTools] Inicializando funcionalidades...');
-            
-            // Inicializar Video Spoof se habilitado
-            if (window.KhanTools.config.features.videoSpoof) {
-                window.KhanTools.VideoSpoof.init();
-            }
-            
-            // Inicializar Question Spoof se habilitado  
-            if (window.KhanTools.config.features.questionSpoof) {
-                window.KhanTools.QuestionSpoof.init();
-            }
-            
-            // Aplicar Dark Mode se habilitado
-            if (window.KhanTools.config.features.darkMode) {
-                window.KhanTools.DarkMode.toggle(true);
-            }
-            
-            // Criar interface
-            setTimeout(() => {
-                window.KhanTools.Interface.create();
-                window.KhanTools.state.initialized = true;
-                window.KhanTools.showToast(`Khan Tools v${window.KhanTools.config.version} carregado com sucesso!`);
-                console.log(`[KhanTools] ✓ Inicializado com sucesso v${window.KhanTools.config.version}`);
-            }, 1000);
-            
-        } catch (error) {
-            console.error('[KhanTools] Erro na inicialização:', error);
-            alert(`Erro ao carregar Khan Tools: ${error.message}`);
-        }
-    }
+    console.log('✅ Khan Tools interface criada');
     
-    // Aguardar DOM estar pronto
-    if (document.readyState === 'loading') {
-        document.addEventListener('DOMContentLoaded', () => {
-            setTimeout(initialize, 1500);
-        });
-    } else {
-        setTimeout(initialize, 1500);
-    }
+    // Mostrar toast
+    const toast = document.createElement('div');
+    toast.style.cssText = `
+        position: fixed; bottom: 20px; right: 20px;
+        background: #1a1a1a; color: #00d4aa;
+        padding: 12px 16px; border-radius: 8px;
+        font-family: Arial, sans-serif; z-index: 10002;
+    `;
+    toast.textContent = 'Khan Tools carregado!';
+    document.body.appendChild(toast);
+    
+    setTimeout(() => toast.remove(), 3000);
+    
+    console.log('🎉 Khan Tools teste concluído com sucesso!');
     
 })();
